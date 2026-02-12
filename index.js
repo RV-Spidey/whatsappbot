@@ -1,3 +1,8 @@
+import fs from 'fs'
+
+if (fs.existsSync('./auth')) {
+  fs.rmSync('./auth', { recursive: true, force: true })
+}
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason
