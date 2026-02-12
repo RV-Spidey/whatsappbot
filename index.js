@@ -1,36 +1,43 @@
-import fs from 'fs'
-
-if (fs.existsSync('./auth')) {
-  fs.rmSync('./auth', { recursive: true, force: true })
-}
 import makeWASocket, {
   useMultiFileAuthState,
-  DisconnectReason
+  DisconnectReason,
+  fetchLatestBaileysVersion
 } from '@whiskeysockets/baileys'
 
 import express from 'express'
+import axios from 'axios'
+import qrcode from 'qrcode-terminal'
 
+// ==============================
+// EXPRESS SERVER (FOR RENDER)
+// ==============================
 const app = express()
+
 app.get('/', (req, res) => {
-  res.send('Bot is running')
+  res.send('Bot is running 🚀')
 })
 
 app.listen(process.env.PORT || 3000, () => {
   console.log('🌍 Web server running')
 })
 
-import axios from 'axios'
-import qrcode from 'qrcode-terminal'
-
-// 🔁 MAKE SURE THIS IS YOUR PRODUCTION WEBHOOK URL
+// ==============================
+// N8N WEBHOOK
+// ==============================
 const N8N_WEBHOOK_URL =
   'https://nothingxd7.app.n8n.cloud/webhook/7617a1fb-62b3-4758-89a7-7e4150859d3a'
 
+// ==============================
+// START BOT
+// ==============================
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('./auth')
+  const { version } = await fetchLatestBaileysVersion()
 
   const sock = makeWASocket({
     auth: state,
+    version,
+    browser: ['Windows', 'Chrome', '120.0.0']
   })
 
   sock.ev.on('creds.update', saveCreds)
@@ -38,11 +45,11 @@ async function startBot() {
   // =========================
   // CONNECTION HANDLING
   // =========================
-  sock.ev.on('connection.update', (update) => {
+  sock.ev.on('connection.update', async (update) => {
     const { connection, qr, lastDisconnect } = update
 
     if (qr) {
-      console.log('📱 Scan this QR code with WhatsApp')
+      console.log('📱 Scan this QR code with WhatsApp:')
       qrcode.generate(qr, { small: true })
     }
 
@@ -57,8 +64,10 @@ async function startBot() {
       console.log('❌ WhatsApp disconnected')
 
       if (shouldReconnect) {
-        console.log('🔄 Reconnecting...')
-        startBot()
+        console.log('🔄 Reconnecting in 5 seconds...')
+        setTimeout(() => {
+          startBot()
+        }, 5000)
       } else {
         console.log('🚫 Logged out. Delete auth folder and scan again.')
       }
@@ -73,7 +82,7 @@ async function startBot() {
 
     if (!msg.message) return
     if (msg.key.fromMe) return
-    if (msg.key.remoteJid.endsWith('@g.us')) return // Ignore groups
+    if (msg.key.remoteJid.endsWith('@g.us')) return
 
     const text =
       msg.message.conversation ||
@@ -82,7 +91,6 @@ async function startBot() {
     if (!text) return
 
     console.log('📩 Message received:', text)
-    console.log('📡 Sending to n8n...')
 
     try {
       const response = await axios.post(
@@ -91,50 +99,34 @@ async function startBot() {
           from: msg.key.remoteJid,
           message: text,
         },
-        {
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          timeout: 15000,
-        }
+        { timeout: 15000 }
       )
 
-      console.log('🔎 Full n8n response:', response.data)
+      console.log('🔎 n8n response:', response.data)
 
-      // Try multiple possible formats safely
-      let replyText = null
-
-      if (response.data?.reply) {
-        replyText = response.data.reply
-      } else if (response.data?.text) {
-        replyText = response.data.text
-      } else if (typeof response.data === 'string') {
-        replyText = response.data
-      }
+      const replyText =
+        response.data?.reply ||
+        response.data?.text ||
+        response.data?.output ||
+        null
 
       if (!replyText) {
-        console.log('⚠️ No valid reply field found in n8n response')
+        console.log('⚠️ No reply received from n8n')
         return
       }
 
-      // Human-like delay (2–5 seconds)
-      await new Promise((resolve) =>
-        setTimeout(resolve, 2000 + Math.random() * 3000)
+      await new Promise(resolve =>
+        setTimeout(resolve, 2000 + Math.random() * 2000)
       )
 
       await sock.sendMessage(msg.key.remoteJid, {
         text: replyText,
       })
 
-      console.log('📤 Reply sent:', replyText)
+      console.log('📤 Reply sent')
 
     } catch (err) {
-      if (err.response) {
-        console.error('❌ n8n responded with error:', err.response.status)
-        console.error('❌ Response body:', err.response.data)
-      } else {
-        console.error('❌ n8n request failed:', err.message)
-      }
+      console.error('❌ n8n error:', err.message)
     }
   })
 }
